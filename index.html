@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Jewelry studio | KREAN JEWELS</title>
+<style>*{box-sizing:border-box}body{margin:auto;max-width:900px;padding:clamp(16px,4vw,48px);background:#f6f3ec;color:#24372f;font:16px "Work Sans",system-ui,sans-serif}h1{font:clamp(32px,6vw,62px) Georgia,serif;margin:.3em 0}header small{letter-spacing:.2em}.stage{position:relative;height:clamp(300px,50vh,520px);background:radial-gradient(ellipse,#fffaf1,#d8d0bf);overflow:hidden;border-radius:12px}canvas,video,img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}canvas{touch-action:none;cursor:grab}section{display:flex;gap:16px;flex-wrap:wrap;align-items:end;margin:18px 0}label{display:grid;gap:4px}select,button,input{font:inherit}button,select{padding:.55rem;border:1px solid #8c988e;border-radius:5px;background:white}button{cursor:pointer}#camera{background:#24372f;color:white}p{line-height:1.5}</style>
+<header><small>KREAN JEWELS</small><h1>Jewelry studio</h1></header>
+<div class="stage"><video autoplay muted playsinline hidden></video><img hidden alt="Selected try-on background"><canvas aria-label="Interactive 3D solitaire ring"></canvas></div>
+<section><label>Metal<select id="metal"><option>Yellow gold</option><option>White gold</option><option>Rose gold</option></select></label><label>Stone<select id="stone"><option>Round</option><option>Oval</option></select></label><label>Rotation<input id="yaw" type="range" min="-180" max="180" value="24"></label><label>Tilt<input id="tilt" type="range" min="-85" max="85" value="32"></label><label>Scale<input id="size" type="range" min="5" max="110" value="72"></label></section>
+<section><button id="camera">Start camera try-on</button><label>Try on a hand photo<input id="file" type="file" accept="image/*"></label><button id="reset">Reset viewer</button></section>
+<p id="status" role="status">Drag to rotate the sample ring. Use the camera or a photo to position it on your finger.</p><p>Illustrative model. Try-on uses manual placement and scale. Images stay on your device.</p>
+<script>
+const el=id=>document.getElementById(id);
+const canvas=document.querySelector("canvas"), ctx=canvas.getContext("2d");
+const video=document.querySelector("video"), photo=document.querySelector("img");
+let position=[.5,.55],mode="viewer",stream=null,request=0,photoURL="",drag=null;
+const tau=2*Math.PI;
+function mesh(){
+  const faces=[];
+  function tube(a,b){
+    const r=1+.105*Math.cos(b);
+    return [r*Math.cos(a),r*Math.sin(a),.105*Math.sin(b)];
+  }
+  for(let i=0;i<64;i++)for(let j=0;j<12;j++){
+    const a=i*tau/64,b=j*tau/12;
+    faces.push({type:"metal",p:[tube(a,b),tube(a+tau/64,b),tube(a+tau/64,b+tau/12),tube(a,b+tau/12)]});
+  }
+  function gem(i,r,h){
+    const a=i*tau/12;
+    return [Math.cos(a)*r*(el("stone").value==="Oval"?.74:1),-1-h,Math.sin(a)*r];
+  }
+  const table=[];
+  for(let i=0;i<12;i++){
+    const a=gem(i,.36,.16),b=gem(i+1,.36,.16),c=gem(i,.22,.31),d=gem(i+1,.22,.31);
+    table.push(c);
+    for(const p of [[a,b,c],[b,d,c],[a,gem(0,0,-.09),b]])faces.push({type:"gem",p});
+  }
+  faces.push({type:"gem",p:table});
+  return faces;
+}
+let model=mesh();
+function render(){
+  const w=canvas.clientWidth,h=canvas.clientHeight,dpr=Math.min(devicePixelRatio||1,2);
+  canvas.width=Math.round(w*dpr);canvas.height=Math.round(h*dpr);ctx.setTransform(dpr,0,0,dpr,0,0);
+  const a=el("yaw").value*Math.PI/180,b=el("tilt").value*Math.PI/180;
+  const scale=Math.min(w,h)*Number(el("size").value)/225;
+  function rotate([x,y,z]){
+    const u=x*Math.cos(a)+z*Math.sin(a),v=z*Math.cos(a)-x*Math.sin(a);
+    return [u,y*Math.cos(b)-v*Math.sin(b),y*Math.sin(b)+v*Math.cos(b)];
+  }
+  const faces=model.map(face=>{
+    const p=face.p.map(rotate);
+    return {p,type:face.type,depth:p.reduce((s,v)=>s+v[2],0)/p.length};
+  }).sort((f,g)=>f.depth-g.depth);
+  const metal={"Yellow gold":[44,66],"Rose gold":[17,55],"White gold":[205,8]}[el("metal").value];
+  for(const {p,type} of faces){
+    const u=p[1].map((n,i)=>n-p[0][i]),v=p[2].map((n,i)=>n-p[0][i]);
+    const n=[u[1]*v[2]-u[2]*v[1],u[2]*v[0]-u[0]*v[2],u[0]*v[1]-u[1]*v[0]];
+    const light=Math.abs((n[0]*.4-n[1]*.74+n[2]*.53)/(Math.hypot(...n)||1));
+    const [hue,sat]=type==="metal"?metal:[202,29];
+    ctx.fillStyle="hsl("+hue+" "+sat+"% "+((type==="metal"?28:51)+light*44)+"%)";
+    ctx.beginPath();p.forEach(([x,y],i)=>i?ctx.lineTo(w*position[0]+x*scale,h*position[1]+y*scale):ctx.moveTo(w*position[0]+x*scale,h*position[1]+y*scale));ctx.closePath();ctx.fill();ctx.strokeStyle=ctx.fillStyle;ctx.lineWidth=.5;ctx.stroke();
+  }
+}
+function clearMedia(){
+  request++;if(stream)stream.getTracks().forEach(t=>t.stop());stream=null;
+  video.srcObject=null;video.hidden=true;photo.hidden=true;photo.removeAttribute("src");
+  if(photoURL)URL.revokeObjectURL(photoURL);photoURL="";mode="viewer";el("camera").textContent="Start camera try-on";
+}
+function place(kind){
+  mode=kind;position=[.5,.5];el("size").value=20;el("tilt").value=70;el("yaw").value=0;
+  el("status").textContent="Drag the ring onto your finger. Adjust tilt, rotation and scale to align it.";render();
+}
+el("camera").onclick=async()=>{
+  if(mode==="camera"){el("reset").click();return;}
+  clearMedia();const id=request;
+  try{
+    const media=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:"environment"}},audio:false});
+    if(id!==request){media.getTracks().forEach(t=>t.stop());return;}
+    stream=media;video.srcObject=media;await video.play();if(id!==request)return;
+    video.hidden=false;el("camera").textContent="Stop camera";place("camera");
+  }catch{if(id===request){clearMedia();el("status").textContent="Camera unavailable. Allow camera access or choose a hand photo.";}}
+};
+el("file").onchange=()=>{
+  const file=el("file").files[0];if(!file)return;
+  clearMedia();const id=request;photoURL=URL.createObjectURL(file);
+  photo.onload=()=>{if(request===id){photo.hidden=false;place("photo");}};
+  photo.onerror=()=>{if(request===id){clearMedia();el("status").textContent="Unable to read this photo. Try a JPEG or PNG.";}};photo.src=photoURL;el("file").value="";
+};
+el("reset").onclick=()=>{
+  clearMedia();position=[.5,.55];el("yaw").value=24;el("tilt").value=32;el("size").value=72;
+  el("status").textContent="Drag to rotate the sample ring.";render();
+};
+canvas.onpointerdown=e=>{canvas.setPointerCapture(e.pointerId);drag=[e.clientX,e.clientY];};
+canvas.onpointermove=e=>{
+  if(!drag)return;const dx=e.clientX-drag[0],dy=e.clientY-drag[1];drag=[e.clientX,e.clientY];
+  if(mode==="viewer"){el("yaw").value=((Number(el("yaw").value)+dx+540)%360)-180;el("tilt").value=Number(el("tilt").value)+dy;}
+  else position=position.map((n,i)=>Math.max(0,Math.min(1,n+(i?dy/canvas.clientHeight:dx/canvas.clientWidth))));
+  render();
+};
+canvas.onlostpointercapture=()=>drag=null;
+for(const id of ["metal","stone","yaw","tilt","size"])el(id).oninput=()=>{if(id==="stone")model=mesh();render();};
+window.addEventListener("pagehide",clearMedia);
+new ResizeObserver(render).observe(canvas);render();
+</script></html>
